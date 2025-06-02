@@ -1,0 +1,136 @@
+﻿@page "/register"
+@using System.Net
+@using Blazored.LocalStorage
+@inject HttpClient Http
+@inject ILocalStorageService LocalStorage
+@inject NavigationManager Navigation
+@using DnsClient;
+
+<h3>Register</h3>
+
+<EditForm Model="registerRequest" OnValidSubmit="HandleRegister">
+    <DataAnnotationsValidator/>
+    <ValidationSummary/>
+
+    <input @bind="registerRequest.UserName" placeholder="Benutzername" required/>
+    <input @bind="registerRequest.Email" placeholder="E-Mail" required/>
+    <input @bind="registerRequest.Password" placeholder="Passwort" type="password" required/>
+
+    <button type="submit">Registrieren</button>
+</EditForm>
+
+@if (!string.IsNullOrEmpty(fehlermeldung))
+{
+    <MudAlert Severity="Severity.Error">@fehlermeldung</MudAlert>
+}
+
+@code {
+    private RegisterRequest registerRequest = new();
+    private string? fehlermeldung;
+
+    private async Task<bool> isEmailDomainExistingAsync(string email)
+    {
+        try
+        {
+            var domain = email.Split('@')[1];
+            var lookup = new LookupClient();
+            var result = await lookup.QueryAsync(domain, QueryType.MX);
+            return result.Answers.MxRecords().Any();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task HandleRegister()
+    {
+        fehlermeldung = null;
+        if (!IsEmailFormatCorrect(registerRequest.Email))
+        {
+            fehlermeldung = "Bitte gib eine gültige E-Mail-Adresse ein.";
+            return;
+        }
+
+        if (!await isEmailDomainExistingAsync(registerRequest.Email))
+        {
+            fehlermeldung = "Die E-Mail-Domain scheint nicht zu existieren.";
+            return;
+        }
+
+
+        if (!IsProgramStrongEnough(registerRequest.Password))
+        {
+            fehlermeldung = "Das Passwort muss mindestens 8 Zeichen lang sein und Großbuchstaben, Kleinbuchstaben, eine Zahl und ein Sonderzeichen enthalten.";
+            return;
+        }
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("https://localhost:7158/api/account/register", registerRequest);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var auth = await response.Content.ReadFromJsonAsync<AuthResponse>();
+                await LocalStorage.SetItemAsync("authToken", auth!.Token);
+                Http.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", auth.Token);
+                Navigation.NavigateTo("/");
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                fehlermeldung = $"Registrierung fehlgeschlagen {response.StatusCode} - {errorContent}";
+            }
+        }
+        catch (Exception ex)
+        {
+            fehlermeldung = $"Fehler: {ex.Message}";
+        }
+    }
+
+    private static bool IsEmailFormatCorrect(string email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return false;
+
+        try
+        {
+            var addr = new System.Net.Mail.MailAddress(email);
+            return addr.Address == email;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool IsProgramStrongEnough(string passwort)
+    {
+        if (string.IsNullOrWhiteSpace(passwort) || passwort.Length < 8)
+            return false;
+
+        bool hatGrossbuchstaben = passwort.Any(char.IsUpper);
+        bool hatKleinbuchstaben = passwort.Any(char.IsLower);
+        bool hatZahlen = passwort.Any(char.IsDigit);
+        bool hatSonderzeichen = passwort.Any(c => !char.IsLetterOrDigit(c));
+
+        return hatGrossbuchstaben && hatKleinbuchstaben && hatZahlen && hatSonderzeichen;
+    }
+
+
+    public class RegisterRequest
+    {
+        public string UserName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+
+
+    public class AuthResponse
+    {
+        public string Token { get; set; } = string.Empty;
+        public string UserName { get; set; } = string.Empty;
+    }
+
+}
